@@ -768,6 +768,10 @@ class DataClassGenerator {
                         this.insertToJson(clazz);
                     if (readSetting('fromJson.enabled') && this.isPartSelected('serialization'))
                         this.insertFromJson(clazz);
+                    if (readSetting('toProto.enabled') && this.isPartSelected('serialization'))
+                        this.insertToProto(clazz);
+                    if (readSetting('fromProto.enabled') && this.isPartSelected('serialization'))
+                        this.insertFromProto(clazz);
                 }
 
                 if (readSetting('toString.enabled') && this.isPartSelected('toString'))
@@ -931,14 +935,11 @@ class DataClassGenerator {
     insertConstructor(clazz) {
         const withDefaults = readSetting('constructor.default_values');
 
-        let constr = '';
+        let constr = 'const ';
         let startBracket = '({';
         let endBracket = '})';
 
         if (clazz.constr != null) {
-            if (clazz.constr.trimLeft().startsWith('const'))
-                constr += 'const ';
-
             // Detect custom constructor brackets and preserve them.
             const fConstr = clazz.constr.replace('const', '').trimLeft();
 
@@ -949,9 +950,6 @@ class DataClassGenerator {
             if (fConstr.includes('])')) endBracket = '])';
             else if (fConstr.includes('})')) endBracket = '})';
             else endBracket = ')';
-        } else {
-            if (clazz.isWidget || ((clazz.usesEquatable || readSetting('useEquatable')) && this.isPartSelected('useEquatable')))
-                constr += 'const ';
         }
 
         constr += clazz.name + startBracket + '\n';
@@ -1080,6 +1078,8 @@ class DataClassGenerator {
                     return `${name}${nullSafe}.value${endFlag}`;
                 case 'IconData':
                     return `${name}${nullSafe}.codePoint${endFlag}`
+                case 'BigInt':
+                    return `${name}${nullSafe}.toString()${endFlag}`
                 default:
                     return `${name}${!prop.isPrimitive ? `${nullSafe}.toMap()` : ''}${endFlag}`;
             }
@@ -1134,17 +1134,20 @@ class DataClassGenerator {
             switch (prop.type) {
                 case 'DateTime':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `DateTime.fromMillisecondsSinceEpoch(${value}${materialConvertValue})`;
+                    return `DateTime.fromMillisecondsSinceEpoch(${value}${!prop.isNullable ? '' : ' ?? 0'}${materialConvertValue})`;
                 case 'Color':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `Color(${value}${materialConvertValue})`;
+                    return `Color(${value}${!prop.isNullable ? '' : ' ?? 0xffffff'}${materialConvertValue})`;
                 case 'IconData':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `IconData(${value}${materialConvertValue}, fontFamily: 'MaterialIcons')`
+                    return `IconData(${value}${!prop.isNullable ? '' : ' ?? 0'}${materialConvertValue}, fontFamily: 'MaterialIcons')`
+                case 'BigInt':
+                    value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
+                    return `BigInt.parse(${value}${!prop.isNullable ? '' : ' ?? 0'} as String)`  
                 default:
                     return `${
                       !prop.isPrimitive ? prop.type + ".fromMap(" : ""
-                    }${value}${!prop.isPrimitive ? " as Map<String,dynamic>)" : ""}${
+                    }(${value})${!prop.isNullable ? '' : ' ?? {}'}${!prop.isPrimitive ? " as Map<String,dynamic>)" : ""}${
                       fromJSON
                         ? prop.isDouble
                           ? ".toDouble()"
@@ -1180,8 +1183,8 @@ class DataClassGenerator {
             if (p.isEnum) {
                 // List<E>
                 if (p.isCollection) {
-                    const defaultValue = withDefaultValues ? ' ?? <int>[]' : '';
-                    method += `${p.type}.from((${leftOfValue}${value}${defaultValue}${rightOfValue} as List<int>).map<${p.listType.rawType}>((x) => ${p.listType.rawType}.values[x]),)`
+                    const defaultValue = withDefaultValues ? ' ?? []' : '';
+                    method += `${p.type}.from((${leftOfValue}${value}${defaultValue}${rightOfValue} as List<${p.listType.rawType}>).map<${p.listType.rawType}>((x) => ${p.listType.rawType}.values[x]),)`
                 } else {
                     const defaultValue = withDefaultValues ? ' ?? 0' : '';
                     method += `${p.rawType}.values[${leftOfValue}${value}${defaultValue}${rightOfValue} as int]`;
@@ -1189,18 +1192,18 @@ class DataClassGenerator {
 
             } else if (p.isCollection) {
                 const defaultValue =
-                  withDefaultValues && !p.isNullable && p.isPrimitive
+                  withDefaultValues && !p.isNullable
                     ? ` ?? const <${p.listType.rawType}>${
                         p.isList ? "[]" : "{}"
-                      })`
+                      }`
                     : "";
 
                 method += `${p.type}.from(`;
-                /// List<String>.from(map['allowed'] ?? const <String>[] as List<String>), 
+                /// List<String>.from((map['allowed'] ?? const <String>[]) as List<String>), 
                 if (p.isPrimitive) {
-                    method += `(${value}${defaultValue} as ${p.type})`;
+                    method += `((${value}${defaultValue}) as ${p.type}),)`;
                 } else {
-                    method += `(${value} as List<int>).map<${p.listType.rawType}>((x) => ${customTypeMapping(p, 'x')},),${defaultValue})`;
+                    method += `((${value}${defaultValue}) as List<${p.listType.rawType}>).map<${p.listType.rawType}>((x) => x,),)`;
                 }
             /// (map['name'] ?? '') as String
             } else {
@@ -1243,6 +1246,27 @@ class DataClassGenerator {
 
         const method = `factory ${clazz.name}.fromJson(String source) => ${clazz.name}.fromMap(json.decode(source) as Map<String, dynamic>);`;
         this.appendOrReplace('fromJson', method, `factory ${clazz.name}.fromJson(String source)`, clazz);
+    }
+
+    /**
+     * @param {DartClass} clazz
+     */
+    insertToProto(clazz) {
+        this.requiresImport('dart:convert');
+
+        const method = `proto.${clazz.name} toProto() => proto.${clazz.name}.create()..mergeFromProto3Json(toMap());`;
+        this.appendOrReplace('toProto', method, `proto.${clazz.name} toProto()`, clazz);
+    }
+
+    /**
+    * @param {DartClass} clazz
+    */
+    insertFromProto(clazz) {
+        this.requiresImport('dart:convert');
+
+        const method = `factory ${clazz.name}.fromProto(proto.${clazz.name} source) =>
+        ${clazz.name}.fromMap(source.toProto3Json() as Map<String, dynamic>);`;
+        this.appendOrReplace('fromProto', method, `factory ${clazz.name}.fromProto(proto.${clazz.name} source)`, clazz);
     }
 
     /**
@@ -2303,7 +2327,7 @@ async function writeFile(content, name, open = true, path = getCurrentPath()) {
         } while (fs.existsSync(p));
     }
 
-    fs.writeFileSync(p, content, 'utf-8');
+    fs.writeFileSync(p, content, {encoding: "utf8",});
     if (open) {
         let openPath = vscode.Uri.parse("file:///" + p);
         let doc = await vscode.workspace.openTextDocument(openPath);
