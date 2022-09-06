@@ -1147,7 +1147,7 @@ class DataClassGenerator {
                 default:
                     return `${
                       !prop.isPrimitive ? prop.type + ".fromMap(" : ""
-                    }(${value})${!prop.isNullable ? '' : ' ?? {}'}${!prop.isPrimitive ? " as Map<String,dynamic>)" : ""}${
+                    }${value}${withDefaultValues && prop.isPrimitive ? '' : ' ?? {}'}${!prop.isPrimitive ? " as Map<String,dynamic>,)" : ""}${
                       fromJSON
                         ? prop.isDouble
                           ? ".toDouble()"
