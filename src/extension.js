@@ -1146,8 +1146,8 @@ class DataClassGenerator {
                     return `BigInt.parse(${value}${!prop.isNullable ? '' : ' ?? 0'} as String)`  
                 default:
                     return `${
-                      !prop.isPrimitive ? prop.type + ".fromMap(" : ""
-                    }${value}${withDefaultValues && prop.isPrimitive ? '' : ' ?? {}'}${!prop.isPrimitive ? " as Map<String,dynamic>,)" : ""}${
+                      !prop.isPrimitive ? prop.type + ".fromMap((" : ""
+                    }${value}${withDefaultValues && prop.isPrimitive ? '' : ' ?? {}'}${!prop.isPrimitive ? ") as Map<String,dynamic>,)" : ""}${
                       fromJSON
                         ? prop.isDouble
                           ? ".toDouble()"
