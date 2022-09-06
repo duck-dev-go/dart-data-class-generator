@@ -1203,7 +1203,7 @@ class DataClassGenerator {
                 if (p.isPrimitive) {
                     method += `((${value}${defaultValue}) as ${p.type}),)`;
                 } else {
-                    method += `((${value}${defaultValue}) as List<${p.listType.rawType}>).map<${p.listType.rawType}>((x) => x,),)`;
+                    method += `((${value}${defaultValue}) as List).map<${p.listType.rawType}>((x) => ${p.listType.rawType}.fromMap(x),),)`;
                 }
             /// (map['name'] ?? '') as String
             } else {
