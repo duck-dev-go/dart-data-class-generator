@@ -1081,6 +1081,10 @@ class DataClassGenerator {
                 case 'BigInt':
                     return `${name}${nullSafe}.toString()${endFlag}`
                 default:
+                    if(prop.isList){
+                        return `${name}.map((x){return ${customTypeMapping(prop, 'x', '')};}).toList(growable: false)\n`
+                    }
+
                     return `${name}${!prop.isPrimitive ? `${nullSafe}.toMap()` : ''}${endFlag}`;
             }
         }
@@ -1095,10 +1099,10 @@ class DataClassGenerator {
                 else method += `${p.name}.index,\n`;
             } else if (p.isCollection) {
                 if (p.isMap || p.listType.isPrimitive) {
-                    const mapFlag = p.isSet ? (p.isNullable ? '?' : '') + '.toList()' : '';
+                    const mapFlag = p.isSet ? (p.isNullable ? '?' : '') + '.toList(growable: false)' : '';
                     method += `${p.name}${mapFlag},\n`;
                 } else {
-                    method += `${p.name}.map((x) => ${customTypeMapping(p, 'x', '')}).toList(),\n`
+                    method += `${p.name}.map((x) {return ${customTypeMapping(p, 'x', '')};}).toList(growable: false),\n`
                 }
             } else {
                 method += customTypeMapping(p);
@@ -1124,42 +1128,38 @@ class DataClassGenerator {
          * @param {ClassField} prop
          */
         function customTypeMapping(prop, value = null) {
-            const materialConvertValue = prop.isCollection ? "" :" as int";
             prop = prop.isCollection ? prop.listType : prop;
             const isAddDefault = withDefaultValues && prop.rawType != 'dynamic'&& !prop.isNullable &&  prop.isPrimitive;
             const addLeftDefault = isAddDefault  ? leftOfValue : '';
             const addRightDefault = isAddDefault ? rightOfValue : '';
-            value = value == null ? `${addLeftDefault}map['` + prop.jsonName + "']" : value;
+            let defaultValue = withDefaultValues && prop.isPrimitive ? ` ?? ${prop.defValue}` : '';
+            value = value == null ? `${addLeftDefault}map["${prop.jsonName}"]${defaultValue}${addRightDefault}` : value;
 
             switch (prop.type) {
                 case 'DateTime':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `DateTime.fromMillisecondsSinceEpoch(${value}${!prop.isNullable ? '' : ' ?? 0'}${materialConvertValue})`;
+                    return `DateTime.fromMillisecondsSinceEpoch(${value}${!prop.isNullable ? '' : ' ?? 0'} as int)`;
                 case 'Color':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `Color(${value}${!prop.isNullable ? '' : ' ?? 0xffffff'}${materialConvertValue})`;
+                    return `Color(${value}${!prop.isNullable ? '' : ' ?? 0xffffff'} as int)`;
                 case 'IconData':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
-                    return `IconData(${value}${!prop.isNullable ? '' : ' ?? 0'}${materialConvertValue}, fontFamily: 'MaterialIcons')`
+                    return `IconData(${value}${!prop.isNullable ? '' : ' ?? 0'} as int, fontFamily: 'MaterialIcons')`
                 case 'BigInt':
                     value=withDefaultValues ? `${leftOfValue}${value}??0${rightOfValue}` : value;
                     return `BigInt.parse(${value}${!prop.isNullable ? '' : ' ?? 0'} as String)`  
                 default:
-                    return `${
-                      !prop.isPrimitive ? prop.type + ".fromMap((" : ""
-                    }${value}${withDefaultValues && prop.isPrimitive ? '' : ' ?? {}'}${!prop.isPrimitive ? ") as Map<String,dynamic>,)" : ""}${
-                      fromJSON
-                        ? prop.isDouble
-                          ? ".toDouble()"
-                          : prop.isInt
-                          ? ".toInt()"
-                          : ""
-                        : ""
-                    }${
-                        isAddDefault
-                        ? ` ?? ${prop.defValue}${addRightDefault}`
-                        : ""
-                    }`;
+                    if(prop.isList){
+                        defaultValue = withDefaultValues ? `?? <${prop.listType.rawType}>[]` : '';
+                        return `((${value}${defaultValue}) as List).map<${prop.listType.rawType}>((x){return ${customTypeMapping(prop, 'x')};}).toList(growable: false)`;
+                    }
+
+                    if(!prop.isPrimitive){
+                        defaultValue = withDefaultValues ? '?? Map<String,dynamic>.from({})' : '';
+                        return `${prop.type}.fromMap((${value}${defaultValue}) as Map<String,dynamic>)`;
+                    }
+
+                    return value;
             }
         }
 
@@ -1184,26 +1184,32 @@ class DataClassGenerator {
                 // List<E>
                 if (p.isCollection) {
                     const defaultValue = withDefaultValues ? ' ?? []' : '';
-                    method += `${p.type}.from((${leftOfValue}${value}${defaultValue}${rightOfValue} as List<${p.listType.rawType}>).map<${p.listType.rawType}>((x) => ${p.listType.rawType}.values[x]),)`
+                    method += `${p.type}.from((${leftOfValue}${value}${defaultValue}${rightOfValue} as List<${p.listType.rawType}>).map<${p.listType.rawType}>((x){return ${p.listType.rawType}.values[x];}),)`
                 } else {
                     const defaultValue = withDefaultValues ? ' ?? 0' : '';
                     method += `${p.rawType}.values[${leftOfValue}${value}${defaultValue}${rightOfValue} as int]`;
                 }
 
             } else if (p.isCollection) {
-                const defaultValue =
-                  withDefaultValues && !p.isNullable
-                    ? ` ?? const <${p.listType.rawType}>${
-                        p.isList ? "[]" : "{}"
-                      }`
-                    : "";
+                const defaultValue = (value) => {
+                    if(!withDefaultValues || p.isNullable){
+                        return value;
+                    }
+                    
+                    if(p.isList){
+                        return `${value} ?? const <${p.listType.rawType}>[]`;
+                    }
+
+
+                   return `${value} ?? Map<String, dynamic>.from({})`;
+                }
 
                 method += `${p.type}.from(`;
                 /// List<String>.from((map['allowed'] ?? const <String>[]) as List<String>), 
                 if (p.isPrimitive) {
-                    method += `((${value}${defaultValue}) as ${p.type}),)`;
+                    method += `((${defaultValue(value)}) as ${p.type}),)`;
                 } else {
-                    method += `((${value}${defaultValue}) as List).map<${p.listType.rawType}>((x) => ${p.listType.rawType}.fromMap(x),),)`;
+                    method += `((${defaultValue(value)}) as List).map<${p.listType.rawType}>((x) {return ${customTypeMapping(p, 'x')};}),)`;
                 }
             /// (map['name'] ?? '') as String
             } else {
